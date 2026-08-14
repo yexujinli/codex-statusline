@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turn Stats Bar</title>
+<style>
+  :root {
+    --ink: #111827;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --amber: #d97706;
+    --red: #dc2626;
+  }
+
+  :root[data-theme="dark"] {
+    --ink: #e6e8eb;
+    --muted: #9aa1aa;
+    --accent: #60a5fa;
+    --amber: #fbbf24;
+    --red: #f87171;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    background: transparent;
+  }
+
+  body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
+      "JetBrains Mono", "Cascadia Mono", monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink);
+  }
+
+  .bar {
+    display: flex;
+    align-items: baseline;
+    padding: 1px 0;
+    overflow: hidden;
+    white-space: nowrap;
+    min-height: 18px;
+  }
+
+  .bar.offline {
+    opacity: 0.72;
+  }
+
+  .model {
+    font-weight: 600;
+  }
+
+  .sep {
+    color: var(--muted);
+    opacity: 0.55;
+    margin: 0 7px;
+    user-select: none;
+  }
+
+  .stat {
+    color: var(--muted);
+  }
+
+  .stat b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .right {
+    display: inline-flex;
+    align-items: baseline;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .cost {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .cost.unset {
+    color: var(--amber);
+    font-weight: 500;
+  }
+
+  .cost.invalid {
+    color: var(--red);
+  }
+
+  .configure {
+    appearance: none;
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 0 8px;
+    margin-left: 8px;
+    font: inherit;
+    font-size: 10px;
+    line-height: 16px;
+    cursor: pointer;
+  }
+
+  .configure:hover {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+</style>
+</head>
+<body>
+  <div class="bar" id="bar">
+    <span class="model" id="model">—</span>
+    <span class="sep">·</span>
+    <span class="stat" id="tps">—</span>
+    <span class="sep">·</span>
+    <span class="stat">缓存命中 <b id="cache">—</b>%</span>
+    <span class="sep">·</span>
+    <span class="stat">上下文 <b id="ctxUsed">—</b>/<span id="ctxMax">—</span>
+      <b id="ctxPct">—</b> <span id="ctxLeft">—</span></span>
+    <span class="sep">·</span>
+    <span class="stat">输入→输出 <b id="inTok">—</b>→<b id="outTok">—</b></span>
+    <span class="right">
+      <span class="sep">·</span>
+      <span class="cost" id="cost">—</span>
+      <button class="configure" id="configure" hidden>配置费率</button>
+    </span>
+  </div>
+
+<script>
+  (() => {
+    const params = new URLSearchParams(location.search);
+    let embedded = false;
+    try {
+      embedded = window.parent !== window;
+    } catch {
+      embedded = true;
+    }
+    const demo = params.has("demo") || !embedded;
+
+    const $ = (id) => document.getElementById(id);
+    const setText = (id, value) => { $(id).textContent = value ?? "—"; };
+
+    const dark = window.openai?.theme === "dark"
+      || (!window.openai?.theme
+        && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+
+    const pending = new Map();
+    let nextId = 1;
+
+    function post(method, params) {
+      const id = nextId++;
+      window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`bridge timeout: ${method}`));
+        }, 10_000);
+        pending.set(id, { resolve, reject, timer });
+      });
+    }
+
+    async function callTool(name, args) {
+      if (window.openai?.callTool) {
+        const result = await window.openai.callTool(name, args ?? {});
+        return result?.structuredContent ?? result ?? {};
+      }
+      const response = await post("tools/call", { name, arguments: args ?? {} });
+      return response?.structuredContent ?? response ?? {};
+    }
+
+    function reportSize() {
+      const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+      if (window.openai?.notifyIntrinsicHeight) {
+        window.openai.notifyIntrinsicHeight(height);
+      } else {
+        post("ui/notifications/size-changed", { height }).catch(() => {});
+      }
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent) return;
+      const message = event.data;
+      if (!message || message.jsonrpc !== "2.0") return;
+      if (message.id !== undefined && pending.has(message.id)) {
+        const entry = pending.get(message.id);
+        pending.delete(message.id);
+        clearTimeout(entry.timer);
+        if (message.error) entry.reject(new Error(message.error.message || "bridge error"));
+        else entry.resolve(message.result);
+        return;
+      }
+      if (message.method === "ui/notifications/tool-result") {
+        const params = message.params ?? {};
+        const data = params.structuredContent
+          ?? (Array.isArray(params.content)
+            ? params.content.find((block) => block?.type === "text")?.text
+            : null);
+        if (data) render(typeof data === "string" ? parseMaybe(data) : data);
+      }
+    });
+
+    function parseMaybe(value) {
+      try { return JSON.parse(value); } catch { return null; }
+    }
+
+    function formatK(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number < 0) return "—";
+      if (number >= 1_000_000) return (number / 1_000_000).toFixed(1) + "M";
+      if (number >= 100_000) return Math.round(number / 1_000) + "k";
+      if (number >= 1_000) return (number / 1_000).toFixed(1) + "k";
+      return String(Math.round(number));
+    }
+
+    function formatCny(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "—";
+      if (number === 0) return "¥0";
+      if (number < 0.01) return "≈¥" + number.toFixed(5);
+      return "¥" + number.toFixed(2);
+    }
+
+    // tps：最近 3 次轮询的输出 token 增量 / 时间滑动平均；60 秒无增量则隐藏。
+    const TPS_SAMPLES = 3;
+    const TPS_IDLE_MS = 60_000;
+    let tpsSamples = [];
+    let lastOutputTokens = null;
+    let lastSampleAt = null;
+    let lastActiveAt = null;
+    let lastTps = null;
+
+    function estimateTps(stats) {
+      const output = Number(stats?.turn?.tokens?.output_tokens ?? 0);
+      const now = Date.now();
+      if (lastOutputTokens === null) {
+        lastOutputTokens = output;
+        lastSampleAt = now;
+        return null;
+      }
+      if (output < lastOutputTokens) {
+        // 新轮次开始，输出计数已重置
+        tpsSamples = [];
+        lastOutputTokens = output;
+        lastSampleAt = now;
+        lastActiveAt = null;
+        lastTps = null;
+        return null;
+      }
+      const dOut = output - lastOutputTokens;
+      const dt = (now - lastSampleAt) / 1000;
+      lastOutputTokens = output;
+      lastSampleAt = now;
+      if (dOut > 0 && dt > 0 && dt < 60) {
+        tpsSamples.push({ dOut, dt });
+        if (tpsSamples.length > TPS_SAMPLES) tpsSamples.shift();
+        lastActiveAt = now;
+        const sumOut = tpsSamples.reduce((s, x) => s + x.dOut, 0);
+        const sumDt = tpsSamples.reduce((s, x) => s + x.dt, 0);
+        lastTps = sumDt > 0 ? sumOut / sumDt : null;
+      }
+      if (lastActiveAt !== null && now - lastActiveAt > TPS_IDLE_MS) return null;
+      return lastTps;
+    }
+
+    function setTps(tps) {
+      if (tps === null || tps === undefined || !Number.isFinite(Number(tps))) {
+        setText("tps", "—");
+        return;
+      }
+      setText("tps", "≈" + Math.round(Number(tps)) + " tps");
+    }
+
+    function resetStats() {
+      setText("model", "—");
+      setText("tps", "—");
+      setText("cache", "—");
+      setText("ctxUsed", "—");
+      setText("ctxMax", "—");
+      setText("ctxPct", "—");
+      setText("ctxLeft", "—");
+      setText("inTok", "—");
+      setText("outTok", "—");
+    }
+
+    function render(stats) {
+      if (!stats) return;
+      const bar = $("bar");
+      bar.classList.remove("offline");
+
+      if (stats.service === "stopped") {
+        bar.classList.add("offline");
+        resetStats();
+        setText("model", "tracker 离线");
+        $("cost").textContent = "未连接";
+        $("cost").className = "cost invalid";
+        $("configure").hidden = true;
+        return;
+      }
+      if (stats.state === "no_generation") {
+        resetStats();
+        setText("model", "等待首次刷新");
+        $("cost").textContent = "—";
+        $("cost").className = "cost unset";
+        $("configure").hidden = true;
+        return;
+      }
+      if (stats.state === "error") {
+        bar.classList.add("offline");
+        resetStats();
+        setText("model", "读取失败");
+        $("cost").textContent = stats.message ?? "未知错误";
+        $("cost").className = "cost invalid";
+        $("configure").hidden = true;
+        return;
+      }
+
+      setText("model", stats.model ?? "—");
+      setTps(stats.tps ?? estimateTps(stats));
+      setText("cache", stats.turn?.cache_reuse_pct === null || stats.turn?.cache_reuse_pct === undefined
+        ? "—" : Number(stats.turn.cache_reuse_pct).toFixed(1));
+      const context = stats.context;
+      setText("ctxUsed", formatK(context?.used_tokens));
+      setText("ctxMax", formatK(context?.window_tokens));
+      setText("ctxPct", context?.pressure_pct == null ? "—" : Number(context.pressure_pct).toFixed(1) + "%");
+      setText("ctxLeft", context?.remaining_tokens == null ? "—" : "剩 " + formatK(context.remaining_tokens));
+      setText("inTok", formatK(stats.turn?.tokens?.input_tokens));
+      setText("outTok", formatK(stats.turn?.tokens?.output_tokens));
+
+      const cost = $("cost");
+      const configure = $("configure");
+      const rateStatus = stats.rate_card?.status;
+      if (rateStatus === "invalid") {
+        cost.textContent = "费率无效";
+        cost.className = "cost invalid";
+        configure.hidden = true;
+      } else if (stats.cost?.configured) {
+        let text = "本轮 " + formatCny(stats.cost.turn_estimated_usd);
+        if (stats.cost.thread_estimated_usd != null) {
+          text += " · 本线程 " + formatCny(stats.cost.thread_estimated_usd);
+        }
+        if (stats.cost.coverage_percent != null && stats.cost.coverage_percent < 100) {
+          text += " · 覆盖 " + Math.round(stats.cost.coverage_percent) + "%";
+        }
+        cost.textContent = text;
+        cost.className = "cost";
+        configure.hidden = true;
+      } else {
+        cost.textContent = "费率未配置";
+        cost.className = "cost unset";
+        configure.hidden = false;
+      }
+    }
+
+    function renderError(message) {
+      const bar = $("bar");
+      bar.classList.add("offline");
+      resetStats();
+      setText("model", "连接失败");
+      $("cost").textContent = String(message || "未知错误");
+      $("cost").className = "cost invalid";
+      $("configure").hidden = true;
+    }
+
+    $("configure").addEventListener("click", () => {
+      const prompt = "请用 configure_rate_card 为当前模型配置费率（元/百万 token）："
+        + "input_per_million、cached_input_per_million、output_per_million、"
+        + "credits_input_per_million、credits_cached_input_per_million、"
+        + "credits_output_per_million 和 confidence。若不确定价格，先说明并给出建议值。";
+      if (window.openai?.sendFollowUpMessage) {
+        window.openai.sendFollowUpMessage({ prompt, scrollToBottom: false }).catch?.(() => {});
+      } else {
+        post("ui/message", {
+          role: "user",
+          content: [{ type: "text", text: prompt }],
+        }).catch(() => {});
+      }
+    });
+
+    if (demo) {
+      const absent = params.get("demo") === "absent";
+      render({
+        service: "ok",
+        state: "ready",
+        generation: 6,
+        tps: 151,
+        model: "deepseek-v4-flash",
+        context: {
+          used_tokens: 9_600,
+          window_tokens: 1_000_000,
+          pressure_pct: 0.96,
+          remaining_tokens: 990_400,
+        },
+        turn: {
+          calls: 2,
+          cache_reuse_pct: 99.7,
+          tokens: { input_tokens: 33, output_tokens: 241 },
+        },
+        rate_card: { status: absent ? "absent" : "ready" },
+        cost: absent
+          ? { configured: false }
+          : {
+              configured: true,
+              turn_estimated_usd: 0.02,
+              thread_estimated_usd: 1.25,
+              coverage_percent: 100,
+            },
+      });
+      return;
+    }
+
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(reportSize).observe(document.documentElement);
+    }
+    reportSize();
+    async function poll() {
+      try {
+        const stats = await callTool("turn_stats_poll", {});
+        render(stats);
+      } catch (error) {
+        renderError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setTimeout(poll, 5_000);
+      }
+    }
+    poll();
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "codex-statusline",
+  "interface": {
+    "displayName": "Codex Statusline"
+  },
+  "plugins": [
+    {
+      "name": "turn-stats-bar",
+      "source": {
+        "source": "local",
+        "path": "./plugins/turn-stats-bar"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
