@@ -40,10 +40,25 @@ if ($alreadyOk) {
   # 4. restart with the debug port
   Write-Host "Starting Codex with --remote-debugging-port=9224 ..."
   Start-Process -FilePath $codex -ArgumentList "--remote-debugging-port=9224"
-  Start-Sleep -Seconds 8
+  # 5. verify the debug port comes up; retry once (handles Codex auto-start races)
+  $portOk = $false
+  for ($i = 0; $i -lt 12; $i++) {
+    Start-Sleep -Seconds 3
+    try {
+      $r = Invoke-WebRequest -Uri "http://127.0.0.1:9224/json" -UseBasicParsing -TimeoutSec 3
+      if ($r.StatusCode -eq 200) { $portOk = $true; break }
+    } catch {}
+  }
+  if (-not $portOk) {
+    Write-Host "Debug port not up; retrying once ..."
+    Get-Process ChatGPT, codex -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 3
+    Start-Process -FilePath $codex -ArgumentList "--remote-debugging-port=9224"
+    Start-Sleep -Seconds 10
+  }
 }
 
-# 5. start the statusline injector (background)
+# 6. start the statusline injector (background)
 Write-Host "Starting statusline injector ..."
 $existing = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
   Where-Object { $_.CommandLine -like "*statusline\injector.mjs*" }
