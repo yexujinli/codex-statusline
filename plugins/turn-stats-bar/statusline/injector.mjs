@@ -25,7 +25,7 @@ const DEFAULT_MODEL = process.env.TURN_STATS_MODEL || "deepseek-v4-flash";
 // ---------- 页面注入脚本（幂等，随 tick 重发） ----------
 const INSTALL_SCRIPT = String.raw`
 (function () {
-  var VERSION = 3;
+  var VERSION = 4;
   if (window.__catStatuslineInstalled) {
     if (window.__catStatuslineVersion === VERSION) {
       try { window.__catStatuslineEnsure && window.__catStatuslineEnsure(); } catch (e) {}
@@ -76,6 +76,12 @@ const INSTALL_SCRIPT = String.raw`
       node.id = 'cat-statusline';
       node.textContent = '— · — · 缓存命中 —% · 上下文 —/— — · 输入→输出 —→—';
     }
+    // 没有输入框 = 不在对话页（首页/设置/归档等）→ 隐藏状态栏
+    if (!document.querySelector('.ProseMirror')) {
+      node.style.display = 'none';
+      return;
+    }
+    node.style.display = '';
     var host = composerHost();
     if (host) {
       if (node.parentElement !== host.parentElement) {
