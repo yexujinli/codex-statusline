@@ -25,7 +25,7 @@ const DEFAULT_MODEL = process.env.TURN_STATS_MODEL || "deepseek-v4-flash";
 // ---------- 页面注入脚本（幂等，随 tick 重发） ----------
 const INSTALL_SCRIPT = String.raw`
 (function () {
-  var VERSION = 6;
+  var VERSION = 7;
   if (window.__catStatuslineInstalled) {
     if (window.__catStatuslineVersion === VERSION) {
       try { window.__catStatuslineEnsure && window.__catStatuslineEnsure(); } catch (e) {}
@@ -84,8 +84,9 @@ const INSTALL_SCRIPT = String.raw`
     node.style.display = '';
     var host = composerHost();
     if (host) {
-      if (node.parentElement !== host.parentElement) {
-        host.parentNode.insertBefore(node, host);
+      var container = host.parentNode;
+      if (node.parentNode !== container || node.nextSibling !== host) {
+        container.insertBefore(node, host);
       }
       node.style.position = '';
       node.style.left = '';
@@ -117,13 +118,24 @@ const INSTALL_SCRIPT = String.raw`
 
   ensureStyle();
   ensure();
-  if (window.__catStatuslineObserver) {
-    try { window.__catStatuslineObserver.disconnect(); } catch (e) {}
+  // 只创建一次 observer；用 rAF 合并高频 DOM 变化，避免切换对话时反复重挂状态栏
+  if (!window.__catStatuslineObserver || window.__catStatuslineObserverVersion !== VERSION) {
+    if (window.__catStatuslineObserver) {
+      try { window.__catStatuslineObserver.disconnect(); } catch (e) {}
+    }
+    var ensurePending = false;
+    function scheduleEnsure() {
+      if (ensurePending) return;
+      ensurePending = true;
+      (window.requestAnimationFrame || function (cb) { setTimeout(cb, 50); })(function () {
+        ensurePending = false;
+        try { ensure(); } catch (e) {}
+      });
+    }
+    window.__catStatuslineObserver = new MutationObserver(scheduleEnsure);
+    window.__catStatuslineObserver.observe(document.documentElement, { childList: true, subtree: true });
+    window.__catStatuslineObserverVersion = VERSION;
   }
-  window.__catStatuslineObserver = new MutationObserver(function () {
-    try { ensure(); } catch (e) {}
-  });
-  window.__catStatuslineObserver.observe(document.documentElement, { childList: true, subtree: true });
 
   // ---------- 读取当前对话（React fiber，来自 codex-app-transfer 验证过的方案） ----------
   var __CONVID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
