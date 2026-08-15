@@ -25,7 +25,7 @@ const DEFAULT_MODEL = process.env.TURN_STATS_MODEL || "deepseek-v4-flash";
 // ---------- 页面注入脚本（幂等，随 tick 重发） ----------
 const INSTALL_SCRIPT = String.raw`
 (function () {
-  var VERSION = 7;
+  var VERSION = 8;
   if (window.__catStatuslineInstalled) {
     if (window.__catStatuslineVersion === VERSION) {
       try { window.__catStatuslineEnsure && window.__catStatuslineEnsure(); } catch (e) {}
@@ -82,6 +82,12 @@ const INSTALL_SCRIPT = String.raw`
       return;
     }
     node.style.display = '';
+    // 对话切换即时通知：页面侧一检测到 convId 变化就发标记，注入器立刻刷新
+    var cur = resolveConvId();
+    if (cur !== window.__catStatuslineLastConv) {
+      window.__catStatuslineLastConv = cur;
+      try { console.log('__catStatuslineRefresh'); } catch (e) {}
+    }
     var host = composerHost();
     if (host) {
       var container = host.parentNode;
@@ -299,14 +305,37 @@ function walkFiles(dir, out) {
   }
 }
 
-function findRollout(convId) {
+// rollout 索引：30 秒重建一次，避免每次切换对话都全盘扫目录
+let rolloutIndex = new Map();
+let rolloutIndexAt = 0;
+const ROLLOUT_ID_RE = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+function refreshRolloutIndex(force) {
+  const now = Date.now();
+  if (!force && rolloutIndex.size > 0 && now - rolloutIndexAt < 30000) return;
+  const index = new Map();
   const files = [];
   for (const root of SESSION_ROOTS) walkFiles(root, files);
-  const suffix = `-${convId}.jsonl`;
-  const matches = files.filter((f) => f.endsWith(suffix));
-  if (!matches.length) return null;
-  matches.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  return matches[0];
+  for (const f of files) {
+    const m = ROLLOUT_ID_RE.exec(f);
+    if (!m) continue;
+    const id = m[1];
+    const existing = index.get(id);
+    if (!existing) {
+      index.set(id, f);
+      continue;
+    }
+    try {
+      if (statSync(f).mtimeMs > statSync(existing).mtimeMs) index.set(id, f);
+    } catch {}
+  }
+  rolloutIndex = index;
+  rolloutIndexAt = now;
+}
+
+function findRollout(convId) {
+  refreshRolloutIndex(false);
+  return rolloutIndex.get(convId) || null;
 }
 
 // rollout 缓存：按 convId 缓存路径与解析结果，文件 mtime 未变则不再重读
@@ -320,7 +349,12 @@ function loadRollout(convId) {
       // file gone: fall through and re-resolve
     }
   }
-  const path = findRollout(convId);
+  let path = findRollout(convId);
+  if (!path) {
+    // 可能是刚创建的新对话 rollout：强制重建一次索引
+    refreshRolloutIndex(true);
+    path = rolloutIndex.get(convId) || null;
+  }
   if (!path) {
     rolloutCache.delete(convId);
     return null;
@@ -450,6 +484,7 @@ function buildLine(convId, ctx, tps, rates) {
 let ws = null;
 let msgId = 0;
 const pending = new Map();
+let refreshRequested = false;
 
 async function getWsUrl() {
   const res = await fetch(`http://${HOST}/json`);
@@ -471,6 +506,15 @@ function openWs(url) {
       try {
         m = JSON.parse(e.data);
       } catch {
+        return;
+      }
+      if (m.method === "Runtime.consoleAPICalled") {
+        try {
+          const args = m.params?.args || [];
+          if (args.some((a) => a?.value === "__catStatuslineRefresh")) {
+            refreshRequested = true;
+          }
+        } catch {}
         return;
       }
       if (m.id !== undefined && pending.has(m.id)) {
@@ -511,6 +555,7 @@ async function ensureConnected() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
   const url = await getWsUrl();
   ws = await openWs(url);
+  await send("Runtime.enable", {}).catch(() => {});
 }
 
 // ---------- 主循环 ----------
@@ -573,7 +618,15 @@ async function main() {
       ws = null;
       console.log("[turn-stats-bar] 重试:", e.message);
     }
-    await new Promise((r) => setTimeout(r, POLL_MS));
+    // 500ms 切片等待：页面通知“对话已切换”时立即刷新，不等下一次轮询
+    const until = Date.now() + POLL_MS;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (refreshRequested) {
+        refreshRequested = false;
+        break;
+      }
+    }
   }
 }
 
