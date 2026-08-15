@@ -8,7 +8,7 @@ import os from "node:os";
 
 const CDP_PORT = process.env.TURN_STATS_CDP_PORT || "9224";
 const HOST = `127.0.0.1:${CDP_PORT}`;
-const POLL_MS = 2500;
+const POLL_MS = 5000;
 const CODE_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const RATE_CARD_PATH = path.join(
   CODE_HOME,
@@ -293,6 +293,27 @@ function findRollout(convId) {
   return matches[0];
 }
 
+// rollout 缓存：按 convId 缓存路径与解析结果，文件 mtime 未变则不再重读
+const rolloutCache = new Map();
+function loadRollout(convId) {
+  const cached = rolloutCache.get(convId);
+  if (cached) {
+    try {
+      if (statSync(cached.path).mtimeMs === cached.mtimeMs) return cached;
+    } catch {
+      // file gone: fall through and re-resolve
+    }
+  }
+  const path = findRollout(convId);
+  if (!path) {
+    rolloutCache.delete(convId);
+    return null;
+  }
+  const entry = { path, mtimeMs: statSync(path).mtimeMs, parsed: parseRollout(path) };
+  rolloutCache.set(convId, entry);
+  return entry;
+}
+
 function readRateCard() {
   try {
     const raw = readFileSync(RATE_CARD_PATH, "utf8");
@@ -372,10 +393,9 @@ function cachePct(usage) {
 }
 
 function buildLine(convId, ctx, tps, rates) {
-  const rollout = convId ? findRollout(convId) : null;
-  let parsed = rollout
-    ? parseRollout(rollout)
-    : { total: null, last: null, contextWindow: null, sessionId: null };
+  const entry = convId ? loadRollout(convId) : null;
+  const rollout = entry?.path ?? null;
+  let parsed = entry?.parsed ?? { total: null, last: null, contextWindow: null, sessionId: null };
   // 严格身份校验：文件内 session_meta.id 必须等于当前对话，否则按无数据处理
   if (parsed.sessionId && parsed.sessionId !== convId) {
     parsed = { total: null, last: null, contextWindow: null, sessionId: null };
