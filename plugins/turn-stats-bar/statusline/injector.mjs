@@ -506,6 +506,7 @@ function buildLine(convId, ctx, tps, rates) {
   parts.push(hasLast ? `${fmtK(last.input_tokens)}→${fmtK(last.output_tokens)}` : "—→—");
   parts.push(`本轮 ${costLast === null ? "—" : fmtCny(costLast)}`);
   parts.push(`线程 ${costTotal === null ? "—" : fmtCny(costTotal)}`);
+  const hasData = !!(convId && rollout && last.input_tokens);
   if (!hasData) {
     const wait = convId ? (rollout ? "等待首次统计…" : "等待首个请求…") : null;
     if (wait) {
@@ -515,7 +516,7 @@ function buildLine(convId, ctx, tps, rates) {
       };
     }
   }
-  return { text: parts.join(" · "), hasData: !!(convId && rollout && last.input_tokens) };
+  return { text: parts.join(" · "), hasData };
 }
 
 // ---------- CDP 客户端（多页面会话） ----------
