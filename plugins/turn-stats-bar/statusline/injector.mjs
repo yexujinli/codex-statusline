@@ -592,33 +592,22 @@ function makeConvState() {
   return { activeConvId: null, pendingConvId: null, pendingCount: 0, lastTps: null };
 }
 
-// 双来源一致时立即切换；单一来源需连续 2 次轮询稳定后才切换。切换瞬间清空 tps。
-function resolveConv(state, candidate, confident) {
+// 任意有效对话 id 立即切换（页面侧有写入守卫兜底，防串号）。切换瞬间清空 tps。
+function resolveConv(state, candidate) {
   if (candidate === state.activeConvId) {
     state.pendingConvId = null;
     state.pendingCount = 0;
     return state.activeConvId;
   }
-  if (candidate !== null && confident) {
+  if (candidate !== null) {
     state.activeConvId = candidate;
     state.pendingConvId = null;
     state.pendingCount = 0;
     state.lastTps = null;
     return state.activeConvId;
   }
-  if (candidate !== null && candidate === state.pendingConvId) {
-    state.pendingCount += 1;
-    if (state.pendingCount >= 2) {
-      state.activeConvId = candidate;
-      state.pendingConvId = null;
-      state.pendingCount = 0;
-      state.lastTps = null;
-      return state.activeConvId;
-    }
-    return null;
-  }
-  state.pendingConvId = candidate;
-  state.pendingCount = candidate !== null ? 1 : 0;
+  state.pendingConvId = null;
+  state.pendingCount = 0;
   return null;
 }
 
@@ -650,7 +639,7 @@ async function tickSession(sess) {
     `${INSTALL_SCRIPT}; window.__catStatuslineRead ? window.__catStatuslineRead() : null;`,
   );
   if (read?.lastTps) sess.state.lastTps = read.lastTps;
-  const convId = resolveConv(sess.state, read?.convId ?? null, read?.confident === true);
+  const convId = resolveConv(sess.state, read?.convId ?? null);
   const ctx = read?.ctx || null;
   const rates = readRateCard();
   const { text, hasData } = buildLine(convId, ctx, sess.state.lastTps, rates);
