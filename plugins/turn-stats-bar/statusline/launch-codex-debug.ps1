@@ -67,6 +67,15 @@ if ($existing) {
 }
 Start-Process -FilePath $node -ArgumentList "`"$injector`"" -WindowStyle Hidden
 
+# 7. ensure the watchdog is running (auto-fix after manual Codex restarts/updates)
+$watchdog = Join-Path $PSScriptRoot "watchdog.ps1"
+$watchdogUp = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -like "*statusline*watchdog.ps1*" }
+if (-not $watchdogUp) {
+  Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File","`"$watchdog`"" -WindowStyle Hidden
+  Write-Host "Watchdog started."
+}
+
 Write-Host ""
 Write-Host "Done. Debug port 9224 is active; injector is running in background."
 Write-Host "Every new conversation will show a single-line status bar above the input box."

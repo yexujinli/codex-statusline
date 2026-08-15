@@ -136,6 +136,12 @@ powershell -ExecutionPolicy Bypass -File .\plugins\turn-stats-bar\statusline\lau
 脚本是幂等的：检测到 Codex 未带调试端口时会自动重启一次并拉起注入器；已带端口时只重启注入器。
 也可直接双击桌面快捷方式 `fix-codex-statusline.cmd`。
 
+### 手动重启 / 更新后自动修复（守护进程）
+
+启动脚本会自动拉起后台守护进程 `statusline/watchdog.ps1`：每 15 秒检查一次，
+发现 Codex 在运行但没有调试端口（手动重启、自动更新等场景）时，会在约 30 秒后
+自动重启一次带调试端口的 Codex 并恢复状态栏。守护进程带 60 秒冷却，不会反复重启。
+
 ## License
 
 [MIT](LICENSE)
