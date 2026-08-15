@@ -136,6 +136,11 @@ powershell -ExecutionPolicy Bypass -File .\plugins\turn-stats-bar\statusline\lau
 脚本是幂等的：检测到 Codex 未带调试端口时会自动重启一次并拉起注入器；已带端口时只重启注入器。
 也可直接双击桌面快捷方式 `fix-codex-statusline.cmd`。
 
+启动方式说明：Windows 上 Codex 是 MSIX 打包应用，普通图标启动会**剥掉所有命令行参数**
+（`shell:AppsFolder` 限制）。启动脚本改用微软官方接口
+`IApplicationActivationManager::ActivateApplication` 带参数激活应用
+（`--remote-debugging-port=9224 --remote-allow-origins=*`），参数不会再丢失。
+
 ### 手动重启 / 更新后自动修复（守护进程）
 
 启动脚本会自动拉起后台守护进程 `statusline/watchdog.ps1`：每 15 秒检查一次，

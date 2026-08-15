@@ -18,6 +18,36 @@ if (-not $codex) {
 }
 Write-Host "Codex path: $codex"
 
+# Official way: IApplicationActivationManager activates the MSIX packaged app with args.
+# Normal shell:AppsFolder launch strips command-line args, losing --remote-debugging-port.
+function Start-CodexActivated {
+  try {
+    $aumid = (Get-StartApps -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -eq 'ChatGPT' } |
+      Select-Object -First 1).AppID
+    if (-not $aumid) {
+      $family = (Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue |
+        Select-Object -First 1).PackageFamilyName
+      if ($family) { $aumid = "$family!App" }
+    }
+    if (-not $aumid) { return $false }
+
+    Add-Type -Path (Join-Path $PSScriptRoot "CodexActivator.cs") -ErrorAction Stop
+
+    $procId = [uint32]0
+    $hr = [CodexActivator]::Activate($aumid, "--remote-debugging-port=9224 --remote-allow-origins=*", [ref]$procId)
+    if ($hr -eq 0) {
+      Write-Host "Activated Codex via IApplicationActivationManager (pid $procId)"
+      return $true
+    }
+    Write-Host "ActivateApplication HRESULT: $hr; falling back to direct exe launch"
+    return $false
+  } catch {
+    Write-Host "COM activation failed: $($_.Exception.Message); falling back to direct exe launch"
+    return $false
+  }
+}
+
 # 2. idempotent: if Codex already runs with debug port 9224, skip restart
 $alreadyOk = $false
 try {
@@ -39,7 +69,10 @@ if ($alreadyOk) {
 
   # 4. restart with the debug port
   Write-Host "Starting Codex with --remote-debugging-port=9224 ..."
-  Start-Process -FilePath $codex -ArgumentList "--remote-debugging-port=9224"
+  $activated = Start-CodexActivated
+  if (-not $activated) {
+    Start-Process -FilePath $codex -ArgumentList "--remote-debugging-port=9224 --remote-allow-origins=*"
+  }
   # 5. verify the debug port comes up; retry once (handles Codex auto-start races)
   $portOk = $false
   for ($i = 0; $i -lt 12; $i++) {
@@ -53,7 +86,10 @@ if ($alreadyOk) {
     Write-Host "Debug port not up; retrying once ..."
     Get-Process ChatGPT, codex -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 3
-    Start-Process -FilePath $codex -ArgumentList "--remote-debugging-port=9224"
+    $activated2 = Start-CodexActivated
+    if (-not $activated2) {
+      Start-Process -FilePath $codex -ArgumentList "--remote-debugging-port=9224 --remote-allow-origins=*"
+    }
     Start-Sleep -Seconds 10
   }
 }
