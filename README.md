@@ -123,6 +123,19 @@ C:\Users\<你>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\
 3. 重启 Codex 后注入的状态栏消失；
 4. 如需移除插件：`codex plugin remove turn-stats-bar@codex-statusline`，并删除已添加的 marketplace。
 
+## 故障排查
+
+### Codex 更新后状态栏消失
+
+Codex 自动更新会直接重启应用，重启后的 Codex **不带调试端口**，状态栏因此消失。修复：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\plugins\turn-stats-bar\statusline\launch-codex-debug.ps1
+```
+
+脚本是幂等的：检测到 Codex 未带调试端口时会自动重启一次并拉起注入器；已带端口时只重启注入器。
+也可直接双击桌面快捷方式 `fix-codex-statusline.cmd`。
+
 ## License
 
 [MIT](LICENSE)
