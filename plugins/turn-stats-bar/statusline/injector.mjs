@@ -25,7 +25,7 @@ const DEFAULT_MODEL = process.env.TURN_STATS_MODEL || "deepseek-v4-flash";
 // ---------- 页面注入脚本（幂等，随 tick 重发） ----------
 const INSTALL_SCRIPT = String.raw`
 (function () {
-  var VERSION = 4;
+  var VERSION = 5;
   if (window.__catStatuslineInstalled) {
     if (window.__catStatuslineVersion === VERSION) {
       try { window.__catStatuslineEnsure && window.__catStatuslineEnsure(); } catch (e) {}
@@ -193,12 +193,13 @@ const INSTALL_SCRIPT = String.raw`
     } catch (e) {}
     return null;
   }
-  // 严格模式：两个来源都存在且一致才返回，否则 null（fail-closed，绝不串对话）
+  // 双来源校验：都存在且一致才用；若仅有一个来源（新对话尚未生成侧边栏条目等），
+  // 用唯一来源；两个来源都存在但不一致 → null（fail-closed，绝不串对话）
   function resolveConvId() {
     var a = sidebarConvId();
     var b = fiberConvId();
-    if (a && b && a === b) return a;
-    return null;
+    if (a && b) return a === b ? a : null;
+    return a || b || null;
   }
   function readCtxUsage() {
     try {
