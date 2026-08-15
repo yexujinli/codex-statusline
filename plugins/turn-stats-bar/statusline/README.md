@@ -9,14 +9,14 @@ rollout 文件，不会出现空白块，也不会串到别的对话。
 1. 关闭 Codex 后，右键以 PowerShell 运行：
 
    ```powershell
-   powershell -ExecutionPolicy Bypass -File "C:\Users\11217\plugins\turn-stats-bar\statusline\launch-codex-debug.ps1"
+powershell -ExecutionPolicy Bypass -File "plugins\turn-stats-bar\statusline\launch-codex-debug.ps1"
    ```
 
    脚本会：关闭 Codex → 以 `--remote-debugging-port=9224` 重启 → 后台启动
    `injector.mjs`。
 
-2. 已配置**开机自动**：登录 Windows 时静默运行
-   `C:\Users\11217\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\codex-statusline.vbs`，
+2. 已配置**开机自动**：登录 Windows 时静默运行启动文件夹里的 `codex-statusline.vbs`
+   （例如 `C:\Users\<你>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\`），
    自动带调试口启动 Codex 并拉起注入器，无需手动操作。脚本是幂等的：
    若 Codex 已经在带调试口运行，则只重启注入器，不会重复重启 Codex。
 

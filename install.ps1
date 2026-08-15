@@ -24,9 +24,26 @@ $json | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $mcp -Encoding UTF8
 # 3. register the local marketplace so Codex can install this plugin
 codex plugin marketplace add $repo
 
+# 4. scheduled task: revive the watchdog every 5 minutes (fully hidden via wscript)
+$watchdogVbs = Join-Path $plugin "statusline\watchdog-hidden.vbs"
+$taskCmd = 'wscript.exe "' + $watchdogVbs + '"'
+schtasks /Create /TN "codex-statusline-watchdog" /TR $taskCmd /SC MINUTE /MO 5 /F | Out-Null
+Write-Host "Scheduled task created: codex-statusline-watchdog (every 5 min)"
+
+# 5. startup entry: auto-start Codex with statusline at logon (fully hidden)
+$startupDir = [Environment]::GetFolderPath("Startup")
+$startupVbs = Join-Path $plugin "statusline\startup-hidden.vbs"
+$startupDest = Join-Path $startupDir "codex-statusline.vbs"
+Copy-Item -LiteralPath $startupVbs -Destination $startupDest -Force
+Write-Host "Startup entry created: $startupDest"
+
+# 6. desktop shortcut: one-click entry that launches Codex with the debug port
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "make-shortcut.ps1")
+
 Write-Host ""
 Write-Host "Done."
+Write-Host "Setup completed: dependencies, marketplace, scheduled task, startup, shortcut."
+Write-Host "Start the statusline now (restarts Codex once with the debug port):"
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$plugin\statusline\launch-codex-debug.ps1`""
 Write-Host "Optional (MCP widget, not required for the statusline):"
 Write-Host "  codex plugin add turn-stats-bar@codex-statusline"
-Write-Host "Start the statusline (must restart Codex once with debug port):"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$plugin\statusline\launch-codex-debug.ps1`""

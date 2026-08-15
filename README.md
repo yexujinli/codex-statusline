@@ -30,6 +30,8 @@ codex-statusline/
 
 ## 安装
 
+> 仅支持 **Windows**（依赖 PowerShell、MSIX 包与 COM 激活）。
+
 ### 1. 克隆仓库
 
 ```powershell
@@ -43,7 +45,8 @@ cd codex-statusline
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-脚本会：安装 `server/` 依赖 → 把 `.mcp.json` 修正为本机绝对路径 → 注册本地插件市场。
+脚本会：安装 `server/` 依赖 → 把 `.mcp.json` 修正为本机绝对路径 → 注册本地插件市场 →
+创建每 5 分钟的计划任务（守护自愈）→ 添加开机自启 → 创建桌面快捷方式。
 
 ### 3. 启动状态栏（首次需重启 Codex 一次）
 
@@ -60,7 +63,9 @@ codex plugin marketplace add yexujinli/codex-statusline
 codex plugin add turn-stats-bar@codex-statusline
 ```
 
-状态栏主功能不依赖该插件，插件只提供对话内的 MCP widget。
+状态栏主功能不依赖该插件，插件只提供对话内的 MCP widget。注意：插件里的 `.mcp.json`
+使用相对路径，若直接通过 marketplace 安装，MCP widget 可能无法启动；需要 widget 时请使用
+本地 clone + `install.ps1` 流程（会自动修正路径），或者手动把 `.mcp.json` 改成绝对路径。
 
 ## 开机自启
 

@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $desktop = [Environment]::GetFolderPath("Desktop")
 $lnkPath = Join-Path $desktop "CodexStatusline.lnk"
-$launcher = "D:\AI\projects\codex-statusline\plugins\turn-stats-bar\statusline\launch-codex-debug.ps1"
+$launcher = Join-Path $PSScriptRoot "plugins\turn-stats-bar\statusline\launch-codex-debug.ps1"
 
 $codex = Get-Process ChatGPT -ErrorAction SilentlyContinue |
   Select-Object -First 1 -ExpandProperty Path
