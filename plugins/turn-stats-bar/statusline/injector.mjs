@@ -363,7 +363,14 @@ function loadRollout(convId) {
     rolloutCache.delete(convId);
     return null;
   }
-  const entry = { path, mtimeMs: statSync(path).mtimeMs, parsed: parseRollout(path) };
+  const parsed = parseRollout(path);
+  // 空结果（还没有 token 统计）不缓存：文件刚创建瞬间可能读到空，
+  // 缓存会导致之后一直显示“等待首次统计”；不缓存则每轮重读直到有数据。
+  if (!parsed.last && !parsed.total) {
+    rolloutCache.delete(convId);
+    return { path, parsed };
+  }
+  const entry = { path, mtimeMs: statSync(path).mtimeMs, parsed };
   rolloutCache.set(convId, entry);
   return entry;
 }
