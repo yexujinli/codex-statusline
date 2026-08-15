@@ -11,7 +11,10 @@ if (-not $codex) {
     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
   if ($candidate) { $codex = $candidate }
 }
-if (-not $codex) { Write-Error "Codex exe not found" }
+if (-not $codex) {
+  Write-Output "Codex not found; skipping desktop shortcut."
+  exit 0
+}
 
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut($lnkPath)
