@@ -25,7 +25,7 @@ const DEFAULT_MODEL = process.env.TURN_STATS_MODEL || "deepseek-v4-flash";
 // ---------- 页面注入脚本（幂等，随 tick 重发） ----------
 const INSTALL_SCRIPT = String.raw`
 (function () {
-  var VERSION = 8;
+  var VERSION = 9;
   if (window.__catStatuslineInstalled) {
     if (window.__catStatuslineVersion === VERSION) {
       try { window.__catStatuslineEnsure && window.__catStatuslineEnsure(); } catch (e) {}
@@ -74,7 +74,10 @@ const INSTALL_SCRIPT = String.raw`
     if (!node) {
       node = document.createElement('div');
       node.id = 'cat-statusline';
-      node.textContent = '— · — · 缓存命中 —% · 上下文 —/— — · 输入→输出 —→—';
+      var txt = document.createElement('span');
+      txt.id = 'cat-statusline-text';
+      txt.textContent = '— · — · 缓存 —% · 上下文 —/— · —→— · 本轮 — · 线程 —';
+      node.appendChild(txt);
     }
     // 没有输入框 = 不在对话页（首页/设置/归档等）→ 隐藏状态栏
     if (!document.querySelector('.ProseMirror')) {
@@ -115,7 +118,8 @@ const INSTALL_SCRIPT = String.raw`
     var node = document.getElementById('cat-statusline');
     if (!node) return;
     if (convId != null && resolveConvId() !== convId) return;
-    if (node.textContent !== String(text)) node.textContent = String(text);
+    var txt = document.getElementById('cat-statusline-text');
+    if (txt && txt.textContent !== String(text)) txt.textContent = String(text);
   };
   window.__catStatuslineSetOffline = function (off) {
     var node = document.getElementById('cat-statusline');
@@ -505,27 +509,49 @@ function buildLine(convId, ctx, tps, rates) {
   return { text: parts.join(" · "), hasData: !!(convId && rollout && last.input_tokens) };
 }
 
-// ---------- CDP 客户端 ----------
-let ws = null;
-let msgId = 0;
-const pending = new Map();
+// ---------- CDP 客户端（多页面会话） ----------
 let refreshRequested = false;
 
-async function getWsUrl() {
-  const res = await fetch(`http://${HOST}/json`);
-  const list = await res.json();
-  const pages = (list || []).filter((t) => t.type === "page");
-  // 主对话页是 app://-/index.html（无 initialRoute/avatar-overlay）；头像浮层不是目标。
-  const page = pages.find((t) => !/avatar-overlay|initialRoute/.test(t.url || "")) || pages[0];
-  if (!page) throw new Error("未找到 Codex 页面目标");
-  return page.webSocketDebuggerUrl;
+class CdpSession {
+  constructor(target) {
+    this.target = target;
+    this.ws = null;
+    this.msgId = 0;
+    this.pending = new Map();
+    this.state = makeConvState();
+  }
+  async connect() {
+    this.ws = await openWs(this.target.webSocketDebuggerUrl, this);
+    await this.send("Runtime.enable", {}).catch(() => {});
+  }
+  send(method, params) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("未连接");
+    const id = ++this.msgId;
+    this.ws.send(JSON.stringify({ id, method, params: params || {} }));
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      setTimeout(() => {
+        if (this.pending.delete(id)) reject(new Error(`CDP 超时: ${method}`));
+      }, 10000);
+    });
+  }
+  async evaluate(expression) {
+    const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+    if (r.exceptionDetails) {
+      throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || "eval error");
+    }
+    return r.result?.value;
+  }
+  close() {
+    try { if (this.ws) this.ws.close(); } catch {}
+  }
 }
 
-function openWs(url) {
+function openWs(url, session) {
   return new Promise((resolve, reject) => {
     const sock = new WebSocket(url);
     sock.onopen = () => resolve(sock);
-    sock.onerror = (e) => reject(new Error("CDP WebSocket 连接失败"));
+    sock.onerror = () => reject(new Error("CDP WebSocket 连接失败"));
     sock.onmessage = (e) => {
       let m;
       try {
@@ -535,16 +561,15 @@ function openWs(url) {
       }
       if (m.method === "Runtime.consoleAPICalled") {
         try {
-          const args = m.params?.args || [];
-          if (args.some((a) => a?.value === "__catStatuslineRefresh")) {
+          if ((m.params?.args || []).some((a) => a?.value === "__catStatuslineRefresh")) {
             refreshRequested = true;
           }
         } catch {}
         return;
       }
-      if (m.id !== undefined && pending.has(m.id)) {
-        const p = pending.get(m.id);
-        pending.delete(m.id);
+      if (m.id !== undefined && session.pending.has(m.id)) {
+        const p = session.pending.get(m.id);
+        session.pending.delete(m.id);
         if (m.error) p.reject(new Error(m.error.message || "CDP error"));
         else p.resolve(m.result);
       }
@@ -552,86 +577,99 @@ function openWs(url) {
   });
 }
 
-async function send(method, params) {
-  if (!ws) throw new Error("未连接");
-  const id = ++msgId;
-  ws.send(JSON.stringify({ id, method, params: params || {} }));
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    setTimeout(() => {
-      if (pending.delete(id)) reject(new Error(`CDP 超时: ${method}`));
-    }, 10000);
-  });
+async function listMainTargets() {
+  const res = await fetch(`http://${HOST}/json`);
+  const list = await res.json();
+  return (list || []).filter(
+    (t) => t.type === "page" && !/avatar-overlay|initialRoute/.test(t.url || ""),
+  );
 }
 
-async function evaluate(expression) {
-  const r = await send("Runtime.evaluate", {
-    expression,
-    returnByValue: true,
-    awaitPromise: true,
-  });
-  if (r.exceptionDetails) {
-    throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || "eval error");
-  }
-  return r.result?.value;
-}
+// ---------- 主循环（每个页面一个独立会话，支持多窗口） ----------
+const sessions = new Map();
 
-async function ensureConnected() {
-  if (ws && ws.readyState === WebSocket.OPEN) return;
-  const url = await getWsUrl();
-  ws = await openWs(url);
-  await send("Runtime.enable", {}).catch(() => {});
+function makeConvState() {
+  return { activeConvId: null, pendingConvId: null, pendingCount: 0, lastTps: null };
 }
-
-// ---------- 主循环 ----------
-let lastTps = null;
-let activeConvId = null;
-let pendingConvId = null;
-let pendingCount = 0;
 
 // 双来源一致时立即切换；单一来源需连续 2 次轮询稳定后才切换。切换瞬间清空 tps。
-function resolveConv(candidate, confident) {
-  if (candidate === activeConvId) {
-    pendingConvId = null;
-    pendingCount = 0;
-    return activeConvId;
+function resolveConv(state, candidate, confident) {
+  if (candidate === state.activeConvId) {
+    state.pendingConvId = null;
+    state.pendingCount = 0;
+    return state.activeConvId;
   }
   if (candidate !== null && confident) {
-    activeConvId = candidate;
-    pendingConvId = null;
-    pendingCount = 0;
-    lastTps = null;
-    return activeConvId;
+    state.activeConvId = candidate;
+    state.pendingConvId = null;
+    state.pendingCount = 0;
+    state.lastTps = null;
+    return state.activeConvId;
   }
-  if (candidate !== null && candidate === pendingConvId) {
-    pendingCount += 1;
-    if (pendingCount >= 2) {
-      activeConvId = candidate;
-      pendingConvId = null;
-      pendingCount = 0;
-      lastTps = null;
-      return activeConvId;
+  if (candidate !== null && candidate === state.pendingConvId) {
+    state.pendingCount += 1;
+    if (state.pendingCount >= 2) {
+      state.activeConvId = candidate;
+      state.pendingConvId = null;
+      state.pendingCount = 0;
+      state.lastTps = null;
+      return state.activeConvId;
     }
     return null;
   }
-  pendingConvId = candidate;
-  pendingCount = candidate !== null ? 1 : 0;
+  state.pendingConvId = candidate;
+  state.pendingCount = candidate !== null ? 1 : 0;
   return null;
 }
 
-async function tick() {
-  await ensureConnected();
-  const read = await evaluate(
+async function syncSessions() {
+  const targets = await listMainTargets();
+  const ids = new Set(targets.map((t) => t.id));
+  for (const [id, sess] of sessions) {
+    if (!ids.has(id)) {
+      sess.close();
+      sessions.delete(id);
+      console.log("[turn-stats-bar] 关闭页面", id.slice(0, 8));
+    }
+  }
+  for (const t of targets) {
+    if (sessions.has(t.id)) continue;
+    const sess = new CdpSession(t);
+    try {
+      await sess.connect();
+      sessions.set(t.id, sess);
+      console.log("[turn-stats-bar] 连接页面", t.id.slice(0, 8), t.url.slice(0, 60));
+    } catch (e) {
+      console.log("[turn-stats-bar] 连接失败", t.id.slice(0, 8), e.message);
+    }
+  }
+}
+
+async function tickSession(sess) {
+  const read = await sess.evaluate(
     `${INSTALL_SCRIPT}; window.__catStatuslineRead ? window.__catStatuslineRead() : null;`,
   );
-  if (read?.lastTps) lastTps = read.lastTps;
-  const convId = resolveConv(read?.convId ?? null, read?.confident === true);
+  if (read?.lastTps) sess.state.lastTps = read.lastTps;
+  const convId = resolveConv(sess.state, read?.convId ?? null, read?.confident === true);
   const ctx = read?.ctx || null;
   const rates = readRateCard();
-  const { text, hasData } = buildLine(convId, ctx, lastTps, rates);
-  await evaluate(
+  const { text, hasData } = buildLine(convId, ctx, sess.state.lastTps, rates);
+  await sess.evaluate(
     `window.__catStatuslineUpdate(${JSON.stringify(text)}, ${JSON.stringify(convId)}); window.__catStatuslineSetOffline(${hasData ? "false" : "true"});`,
   );
+}
+
+async function tick() {
+  await syncSessions();
+  for (const [id, sess] of sessions) {
+    try {
+      await tickSession(sess);
+    } catch (e) {
+      sess.close();
+      sessions.delete(id);
+      console.log("[turn-stats-bar] 页面失效，重连:", id.slice(0, 8), e.message);
+    }
+  }
 }
 
 async function main() {
@@ -640,7 +678,6 @@ async function main() {
     try {
       await tick();
     } catch (e) {
-      ws = null;
       console.log("[turn-stats-bar] 重试:", e.message);
     }
     // 500ms 切片等待：页面通知“对话已切换”时立即刷新，不等下一次轮询
