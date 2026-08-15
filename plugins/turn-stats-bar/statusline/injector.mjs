@@ -8,7 +8,7 @@ import os from "node:os";
 
 const CDP_PORT = process.env.TURN_STATS_CDP_PORT || "9224";
 const HOST = `127.0.0.1:${CDP_PORT}`;
-const POLL_MS = 5000;
+const POLL_MS = 2500;
 const CODE_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const RATE_CARD_PATH = path.join(
   CODE_HOME,
@@ -25,7 +25,7 @@ const DEFAULT_MODEL = process.env.TURN_STATS_MODEL || "deepseek-v4-flash";
 // ---------- 页面注入脚本（幂等，随 tick 重发） ----------
 const INSTALL_SCRIPT = String.raw`
 (function () {
-  var VERSION = 5;
+  var VERSION = 6;
   if (window.__catStatuslineInstalled) {
     if (window.__catStatuslineVersion === VERSION) {
       try { window.__catStatuslineEnsure && window.__catStatuslineEnsure(); } catch (e) {}
@@ -258,10 +258,13 @@ const INSTALL_SCRIPT = String.raw`
   }
 
   window.__catStatuslineRead = function () {
+    var a = sidebarConvId();
+    var b = fiberConvId();
     return {
       convId: resolveConvId(),
-      sidebarId: sidebarConvId(),
-      fiberId: fiberConvId(),
+      sidebarId: a,
+      fiberId: b,
+      confident: !!(a && b && a === b),
       ctx: readCtxUsage(),
       lastTps: window.__lastStatuslineTps || null,
     };
@@ -504,11 +507,18 @@ let activeConvId = null;
 let pendingConvId = null;
 let pendingCount = 0;
 
-// 同一 convId 连续 2 次轮询稳定后才切换；切换瞬间清空 tps 并 fail-closed
-function resolveConv(candidate) {
+// 双来源一致时立即切换；单一来源需连续 2 次轮询稳定后才切换。切换瞬间清空 tps。
+function resolveConv(candidate, confident) {
   if (candidate === activeConvId) {
     pendingConvId = null;
     pendingCount = 0;
+    return activeConvId;
+  }
+  if (candidate !== null && confident) {
+    activeConvId = candidate;
+    pendingConvId = null;
+    pendingCount = 0;
+    lastTps = null;
     return activeConvId;
   }
   if (candidate !== null && candidate === pendingConvId) {
@@ -533,7 +543,7 @@ async function tick() {
     `${INSTALL_SCRIPT}; window.__catStatuslineRead ? window.__catStatuslineRead() : null;`,
   );
   if (read?.lastTps) lastTps = read.lastTps;
-  const convId = resolveConv(read?.convId ?? null);
+  const convId = resolveConv(read?.convId ?? null, read?.confident === true);
   const ctx = read?.ctx || null;
   const rates = readRateCard();
   const { text, hasData } = buildLine(convId, ctx, lastTps, rates);
