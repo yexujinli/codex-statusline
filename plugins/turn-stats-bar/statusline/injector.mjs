@@ -2,7 +2,7 @@
 // 连接 Codex 桌面应用（需以 --remote-debugging-port=9222 启动），
 // 在输入框上方注入一条单行中文状态栏，数据按“当前对话”读 rollout 文件，
 // 不依赖 MCP widget，避免空白块与串线程。
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -374,12 +374,37 @@ function readRateCard() {
   }
 }
 
+const TAIL_BYTES = 512 * 1024;
+
 function parseRollout(file) {
-  const lines = readFileSync(file, "utf8").split(/\r?\n/);
+  const st = statSync(file);
+  let head = "";
+  let body;
+  if (st.size <= TAIL_BYTES) {
+    body = readFileSync(file, "utf8");
+  } else {
+    // 大文件只读头部（会话 id）+ 尾部（最新 token 统计），避免全量解析卡顿
+    const fd = openSync(file, "r");
+    try {
+      const headBuf = Buffer.alloc(4096);
+      readSync(fd, headBuf, 0, 4096, 0);
+      head = headBuf.toString("utf8");
+      const tailBuf = Buffer.alloc(TAIL_BYTES);
+      readSync(fd, tailBuf, 0, TAIL_BYTES, st.size - TAIL_BYTES);
+      body = tailBuf.toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  }
+  const lines = body.split(/\r?\n/);
   let total = null;
   let last = null;
   let contextWindow = null;
   let sessionId = null;
+  if (head) {
+    const m = /"id"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/.exec(head);
+    if (m) sessionId = m[1];
+  }
   for (const line of lines) {
     if (!line) continue;
     let obj;
