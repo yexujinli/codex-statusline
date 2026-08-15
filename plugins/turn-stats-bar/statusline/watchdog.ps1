@@ -2,9 +2,29 @@ $ErrorActionPreference = "Continue"
 
 $launcher = Join-Path $PSScriptRoot "launch-codex-debug.ps1"
 $stateFile = Join-Path $env:TEMP "codex-statusline-watchdog.txt"
+$logFile = Join-Path $env:TEMP "codex-statusline-watchdog.log"
 $intervalSec = 15
 $graceSec = 12
 $cooldownSec = 60
+
+function Write-Log($msg) {
+  try {
+    $line = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " " + $msg
+    Add-Content -LiteralPath $logFile -Value $line -Encoding ASCII -ErrorAction SilentlyContinue
+  } catch {}
+}
+
+# 单实例：已有 watchdog 在跑就直接退出（计划任务会周期拉起它，确保它一直活着）
+$existing = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.CommandLine -like "*statusline*watchdog.ps1*" -and
+    $_.ProcessId -ne $PID -and
+    $_.CommandLine -notlike "*Get-CimInstance*" -and
+    $_.CommandLine -notlike "*-Command*"
+  }
+if ($existing) { exit 0 }
+
+Write-Log "watchdog started (pid $PID)"
 
 $lastRestart = 0
 if (Test-Path -LiteralPath $stateFile) {
@@ -42,6 +62,7 @@ while ($true) {
           if ($r2.StatusCode -ne 200) { $stillBroken = $true }
         } catch { $stillBroken = $true }
         if ($stillBroken) {
+          Write-Log "restarting Codex (port=$portOk injector=$injectorUp)"
           & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher
           Set-Content -LiteralPath $stateFile ([string]$now) -Encoding ASCII
         }
