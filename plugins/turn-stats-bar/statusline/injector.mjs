@@ -506,6 +506,15 @@ function buildLine(convId, ctx, tps, rates) {
   parts.push(hasLast ? `${fmtK(last.input_tokens)}→${fmtK(last.output_tokens)}` : "—→—");
   parts.push(`本轮 ${costLast === null ? "—" : fmtCny(costLast)}`);
   parts.push(`线程 ${costTotal === null ? "—" : fmtCny(costTotal)}`);
+  if (!hasData) {
+    const wait = convId ? (rollout ? "等待首次统计…" : "等待首个请求…") : null;
+    if (wait) {
+      return {
+        text: `${DEFAULT_MODEL} · ${tps ? `≈${tps} tps` : "—"} · ${wait}`,
+        hasData: false,
+      };
+    }
+  }
   return { text: parts.join(" · "), hasData: !!(convId && rollout && last.input_tokens) };
 }
 
