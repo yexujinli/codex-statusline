@@ -63,7 +63,7 @@ while ($true) {
         } catch { $stillBroken = $true }
         if ($stillBroken) {
           Write-Log "restarting Codex (port=$portOk injector=$injectorUp)"
-          & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher
+          & powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $launcher
           Set-Content -LiteralPath $stateFile ([string]$now) -Encoding ASCII
         }
       }
