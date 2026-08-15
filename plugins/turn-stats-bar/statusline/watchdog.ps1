@@ -14,7 +14,7 @@ function Write-Log($msg) {
   } catch {}
 }
 
-# 单实例：已有 watchdog 在跑就直接退出（计划任务会周期拉起它，确保它一直活着）
+# Single instance: exit if another watchdog is already running (scheduled task revives it).
 $existing = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
   Where-Object {
     $_.CommandLine -like "*statusline*watchdog.ps1*" -and
